@@ -21,6 +21,7 @@ func connect()(*net.UDPConn, *net.UDPConn){
     in_socket, err  := net.ListenUDP("udp4",inAddr)
     CheckError(err)
     */
+/*yo*/
     return out_socket, in_socket
 }
 

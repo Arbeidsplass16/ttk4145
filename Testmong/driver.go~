@@ -1,0 +1,171 @@
+package driver
+
+import "fmt"
+import "time"
+
+import "C"
+
+type Direction int
+const(
+	NONE Direction = iota
+	UP
+	DOWN
+)
+
+type button struct{
+	floor int
+	dir Direction
+}
+
+const MAX_SPEED = 4024
+const MIN_SPEED = 2048
+
+func init() {
+	val := io_init()
+
+	if val{
+		fmt.Printf("Driver initiated\n")
+	}
+	else{
+		fmt.Printf("Driver not initiated\n")	
+	}
+
+	ClearDoor()
+	ClearStopButton()
+	ClearLight(1, UP)
+	ClearLight(2, UP)
+	ClearLight(3, UP)
+	ClearLight(2, DOWN)
+	ClearLight(3, DOWN)
+	ClearLight(4, DOWN)
+	ClearLight(1, NONE)
+	ClearLight(2, NONE)
+	ClearLight(3, NONE)
+	ClearLight(4, NONE)
+
+	buttonChan = make(chan button)
+	floorChan = make(chan int)
+	motorChan = make(chan Direction)
+	stopButtonChan = make(chan bool)
+	obsChan = make(chan bool)
+
+	go motorHandler()
+	go listen()
+}
+
+var buttonChan chan button
+var floorChan chan int
+var motorChan chan Direction
+var stopButtonChan chan bool
+var obsChan chan bool
+
+func motorHandler() {
+	currentDir := NONE
+	io_write_analog(MOTOR, MIN_SPEED)
+	fmt.Printf("Motorhandler ready...\n")
+	for{
+		newDir := <- motorChan
+		fmt.Printf("newDir recieved: ")
+		if (newDir == NONE) && (currentDir == UP){
+			fmt.Printf("Motor stopping...\n")
+			io_set_bit(MOTORDIR)
+			io_write_analog(MOTOR, MIN_SPEED)		
+		}
+		else if(newDir == NONE) && (currentDir == DOWN){
+			fmt.Printf("Motor stopping...\n")
+			io_clear_bit(MOTORDIR)
+			io_write_analog(MOTOR, MIN_SPEED)
+		}
+		else if(newDir == UP){
+			fmt.Printf("Motor ascending...\n)
+			io_clear_bit(MOTORDIR)
+			io_write_analog(MOTOR, MAX_SPEED)
+		}
+		else if(newDir == DOWN){
+			fmt.Printf("Motor decending...\n)
+			io_set_bit(MOTORDIR)
+			io_write_analog(MOTOR, MAX_SPEED)		
+		}
+		else{
+			io_write_analog(MOTOR, MIN_SPEED)		
+		}
+		currentDir = newDir
+	}
+}
+
+func listen(){
+	var floorMap = map[int] int{
+		SENSOR1 : 1,
+		SENSOR2 : 2,
+		SENSOR3 : 3,
+		SENSOR4 : 4,	
+	}
+
+	var buttonMap = map[int] button{
+		FLOOR_COMMAND1 	: {1, NONE},
+		FLOOR_COMMAND2 	: {2, NONE},
+		FLOOR_COMMAND3 	: {3, NONE},
+		FLOOR_COMMAND4 	: {4, NONE},
+		FLOOR_UP1 		: {1, UP},
+		FLOOR_UP2 		: {2, UP},
+		FLOOR_UP3 		: {3, UP},
+		FLOOR_DOWN2		: {2, DOWN},
+		FLOOR_DOWN3		: {3, DOWN},
+		FLOOR_DOWN4		: {4, DOWN},
+	}
+	
+	var buttonList : make(map[int]bool)
+	for key, _ := range buttonMap{
+		buttonList[key] = io_read_bit(key)	
+	}
+
+	var floorList := make(map[int]bool)
+	for key, _ := range floorMap {
+		floorList[key] = io_read_bit(key)
+	}
+
+	oldStop := false
+	oldObs := false
+
+	for {
+		time.Sleep(1E7)
+		for key, floor := range floorMap {
+			newValue := io_read_bit(key)
+			if newValue != floorList[key] {
+				newFloor := floor
+				go func() {
+					floorChan <- newFloor
+				}()
+			}
+			floorList[key] = newValue
+		}
+
+		for key, btn := range buttonMap {
+			newValue := io_read_bit(key)
+			if newValue && !buttonList[key] {
+				newButton := btn
+				go func() {
+					buttonChan <- newButton
+				}()
+			}
+			buttonList[key] = newValue
+		}
+
+		newStop := io_read_bit(STOP)
+		if newStop && !oldStop {
+			go func() {
+				stopButtonChan <- true
+			}()
+		}
+		oldStop = newStop
+
+		newObs := io_read_bit(OBSTRUCTION)
+		if newObs != oldObs {
+			go func() {
+				obsChan <- newObs
+			}()
+		}
+		oldObs = newObs
+	}
+
+}
